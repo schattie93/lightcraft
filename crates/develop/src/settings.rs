@@ -689,7 +689,7 @@ impl Default for Optics {
 }
 
 /// Lens corrections embedded in the file, converted to the oriented, default-cropped image: a DNG's `OpcodeList3`
-/// (`WarpRectilinear`, `FixVignetteRadial`), or a raw reader's equivalent of the camera's own correction (Panasonic /
+/// (`WarpRectilinear`, `WarpRectilinear2`, `WarpFisheye`, `FixVignetteRadial`), or a raw reader's equivalent of the camera's own correction (Panasonic /
 /// Leica RW2 distortion, `lightcraft_raw`'s `vendor/rw2.rs`). This is camera/file data (stored on the photo record, not in the develop
 /// settings); "Enable Profile Corrections" applies it, scaled by the profile distortion/vignetting amounts.
 /// LightCraft never uses Adobe LCP lens profiles.
@@ -698,7 +698,7 @@ impl Default for Optics {
 pub struct EmbeddedLens {
     pub warp: Option<EmbeddedWarp>,
     pub vignette: Option<EmbeddedVignette>,
-    /// A DNG 1.6 `WarpRectilinear2` chain (up to [`WARP_STAGES`] stages, in `OpcodeList3` order; each stage warps
+    /// A DNG `WarpRectilinear2` / `WarpFisheye` chain (up to [`WARP_STAGES`] stages, in `OpcodeList3` order; each stage warps
     /// the result of the one before it). When any is set, `warp` is `None`: the chain holds every warp opcode.
     pub stages: [Option<EmbeddedWarpStage>; WARP_STAGES],
 }
@@ -706,7 +706,7 @@ pub struct EmbeddedLens {
 /// Most warp stages an [`EmbeddedLens`] chain keeps.
 pub const WARP_STAGES: usize = 3;
 
-/// One DNG `WarpRectilinear2` (or a `WarpRectilinear` in a chain with one): per plane (R, G, B)
+/// One DNG warp stage (`WarpRectilinear2`, `WarpFisheye`, or a `WarpRectilinear` in a chain): per plane (R, G, B)
 /// `[kr0 .. kr14, kt0, kt1, min_valid_radius, max_valid_radius]`. For an output point at offset
 /// `d = (p − center) / radius` with `r = |d|` and `f = Σ krₚ·clamp(r, min, max)ᵖ`, the source point is
 /// `center + radius · (d·f + tangential(d))`, or `d / f` for the radial part when `reciprocal`.
@@ -718,10 +718,13 @@ pub struct EmbeddedWarpStage {
     /// Normalisation radius as a fraction of the oriented image's long edge.
     pub radius: f64,
     pub reciprocal: bool,
+    /// WarpFisheye: each plane's first four coefficients multiply odd powers of atan(r).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fisheye: bool,
 }
 
 impl EmbeddedLens {
-    /// Whether a `WarpRectilinear2` chain is set.
+    /// Whether an ordered warp chain is set.
     pub fn has_stages(&self) -> bool {
         self.stages.iter().any(Option::is_some)
     }

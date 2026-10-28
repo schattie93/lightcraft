@@ -303,7 +303,7 @@ fn stage(kr: &[(usize, f64)], center: Point, radius: f64, reciprocal: bool) -> E
         k[i] = v;
     }
     k[18] = 1.0;
-    EmbeddedWarpStage { planes: [k; 3], center, radius, reciprocal }
+    EmbeddedWarpStage { planes: [k; 3], center, radius, reciprocal, fisheye: false }
 }
 
 fn chain(stages: &[EmbeddedWarpStage]) -> Warp {
@@ -474,4 +474,46 @@ fn defringe_amounts_past_the_sliders_act_as_their_end() {
     };
     assert_eq!(at(1e300, 1.0).data, at(20.0, 1.0).data);
     assert_eq!(at(f64::MAX, 1e300).data.len(), 800, "a huge scale too");
+}
+
+#[test]
+fn fisheye_stage_preserves_orientation_resolution_and_centre() {
+    let center = Point::new(0.375, 0.25);
+    let radius = 0.7;
+    let mut st = stage(&[(0, 1.0), (1, 0.03)], center, radius, false);
+    st.fisheye = true;
+    let lens = EmbeddedLens { stages: [Some(st), None, None], ..Default::default() };
+    let (w, h) = (640.0, 480.0);
+    let p = Point::new(430.5, 290.5);
+    let source = embedded_stage(&st, p, 0, w, h);
+    let scaled = embedded_stage(&st, Point::new(p.x / 2.0, p.y / 2.0), 0, w / 2.0, h / 2.0);
+    assert!(scaled.dist(Point::new(source.x / 2.0, source.y / 2.0)) < 1e-10);
+    let c = Point::new(center.x * w, center.y * h);
+    assert_eq!(embedded_stage(&st, c, 0, w, h), c);
+    for i in 1..=8 {
+        let o = Orientation::from_exif(i);
+        let oriented = reorient_lens(&lens, o, w, h).stages[0].unwrap();
+        let (ow, oh) = if o.swaps_axes() { (h, w) } else { (w, h) };
+        let q = o.map(p.x, p.y, w, h);
+        let s = o.map(source.x, source.y, w, h);
+        let actual = embedded_stage(&oriented, Point::new(q.0, q.1), 0, ow, oh);
+        assert!(actual.dist(Point::new(s.0, s.1)) < 1e-10);
+    }
+    let mut wp = Warp::identity(w, h);
+    wp.lens = Some(lens);
+    wp.lens_dist = 1.0;
+    assert!(wp.needs_f64());
+    assert_eq!(wp.block_coverage(&Affine::IDENTITY, 0, 8, 0, 8), None);
+}
+
+#[test]
+fn fisheye_stage_serialization_keeps_older_lenses_compatible() {
+    let st = stage(&[(0, 1.0)], Point::new(0.5, 0.5), 0.7, false);
+    let old = serde_json::to_value(st).unwrap();
+    assert!(old.get("fisheye").is_none(), "old stage JSON stays unchanged");
+    assert_eq!(serde_json::from_value::<EmbeddedWarpStage>(old).unwrap(), st);
+    let fish = EmbeddedWarpStage { fisheye: true, ..st };
+    let json = serde_json::to_value(fish).unwrap();
+    assert_eq!(json["fisheye"], true);
+    assert_eq!(serde_json::from_value::<EmbeddedWarpStage>(json).unwrap(), fish);
 }

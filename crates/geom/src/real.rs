@@ -26,9 +26,14 @@ pub trait Real:
     fn sqrt_nonneg(self) -> Self;
     /// `self` limited to `lo..=hi` (`lo <= hi`).
     fn clamp_range(self, lo: f64, hi: f64) -> Self;
+    /// `atan(self) / self`, continuously extended to 1 at zero (fisheye geometry).
+    fn atan_ratio(self) -> Self;
 }
 
 impl Real for f64 {
+    fn atan_ratio(self) -> f64 {
+        if self == 0.0 { 1.0 } else { self.atan() / self }
+    }
     fn clamp_tiny(self, tiny: f64) -> f64 {
         if self.abs() < tiny { tiny } else { self }
     }
@@ -172,6 +177,12 @@ impl Div<f64> for Interval {
 }
 
 impl Real for Interval {
+    // Transcendental libm rounding is platform dependent. Decline a block proof rather than
+    // claim an enclosure: fisheye coverage is checked per pixel with the scalar formula.
+    fn atan_ratio(self) -> Interval {
+        Interval::UNDECIDED
+    }
+
     /// Unchanged when no value in the interval would be clamped, else undecided.
     fn clamp_tiny(self, tiny: f64) -> Interval {
         if self.lo >= tiny || self.hi <= -tiny { self } else { Interval::UNDECIDED }
@@ -257,5 +268,17 @@ mod tests {
         assert!(Interval::new(-1.0, -1e-300).clamp_tiny(1e-300).is_decided());
         assert!(!Interval::new(-1.0, 1.0).clamp_tiny(1e-300).is_decided());
         assert!(!Interval::new(5e-301, 1.0).clamp_tiny(1e-300).is_decided());
+    }
+}
+
+#[cfg(test)]
+mod fisheye_tests {
+    use super::{Interval, Real};
+
+    #[test]
+    fn atan_ratio_has_a_finite_centre_and_declines_interval_proofs() {
+        assert_eq!(0.0f64.atan_ratio(), 1.0);
+        assert_eq!(1.0f64.atan_ratio(), std::f64::consts::FRAC_PI_4);
+        assert!(!Interval::new(0.0, 1.0).atan_ratio().is_decided());
     }
 }

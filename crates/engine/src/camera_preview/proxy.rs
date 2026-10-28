@@ -348,7 +348,7 @@ pub(crate) struct LensGeometry {
 pub(crate) fn lens_geometry(list3: &[lightcraft_raw::Opcode]) -> Option<LensGeometry> {
     use lightcraft_raw::Opcode;
     let ops: Vec<&Opcode> = lightcraft_raw::opcodes::applied_ops(list3).collect();
-    if ops.iter().any(|op| matches!(op, Opcode::WarpRectilinear2 { .. })) {
+    if ops.iter().any(|op| matches!(op, Opcode::WarpRectilinear2 { .. } | Opcode::WarpFisheye { .. })) {
         return None;
     }
     ops.into_iter().find_map(|op| match op {

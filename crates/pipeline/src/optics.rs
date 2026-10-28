@@ -107,8 +107,8 @@ impl Warp {
             || (self.lens_dist != 0.0 && self.lens.is_some_and(|l| l.warp.is_some() || l.has_stages()))
     }
 
-    /// Whether the embedded lens warp is a `WarpRectilinear2` chain, whose degree-14 polynomials are ill-conditioned
-    /// in `f32` (terms of 1e5 cancelling to 1): a renderer that works in `f32` must sample on the CPU.
+    /// Whether an embedded warp chain needs the CPU geometry path (`WarpRectilinear2` needs
+    /// f64 for its degree-14 polynomial; `WarpFisheye` uses atan, absent from the shader map).
     pub fn needs_f64(&self) -> bool {
         self.lens_dist != 0.0 && self.lens.is_some_and(|l| l.has_stages())
     }
@@ -315,6 +315,14 @@ fn embedded_stage_real<T: Real>(st: &EmbeddedWarpStage, x: T, y: T, ch: usize, w
     let dx = (x - cx) / m;
     let dy = (y - cy) / m;
     let r2 = dx * dx + dy * dy;
+    if st.fisheye {
+        let r = r2.sqrt_nonneg();
+        let ratio = r.atan_ratio();
+        let theta = r * ratio;
+        let t2 = theta * theta;
+        let f = ratio * (t2 * (t2 * (t2 * k[3] + k[2]) + k[1]) + k[0]);
+        return (dx * f * m + cx, dy * f * m + cy);
+    }
     let r = r2.sqrt_nonneg().clamp_range(k[17], k[18]);
     let mut f = r * k[14] + k[13];
     for &c in k[..13].iter().rev() {
@@ -372,7 +380,7 @@ pub fn reorient_lens(lens: &EmbeddedLens, o: Orientation, w: f64, h: f64) -> Emb
                 (k[15], k[16]) = (e.1 - c2.1, e.0 - c2.0);
                 k
             });
-            EmbeddedWarpStage { planes, center: map_pt(st.center), radius: st.radius * long_ratio, reciprocal: st.reciprocal }
+            EmbeddedWarpStage { planes, center: map_pt(st.center), radius: st.radius * long_ratio, reciprocal: st.reciprocal, fisheye: st.fisheye }
         })
     });
     EmbeddedLens { warp, vignette, stages }

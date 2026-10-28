@@ -1774,3 +1774,49 @@ fn existing_photo_settings_are_not_rewritten() {
     drop(s);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn fisheye_lens_survives_probe_crop_orientation_and_source_loading() {
+    use lightcraft_geom::{Orientation, Point};
+    use lightcraft_pipeline::optics::Warp;
+    use lightcraft_raw::{Opcode, Rect};
+    let bytes = crate::tests_xmp::synthetic_dng_with(None, Default::default());
+    let mut raw = lightcraft_raw::decode(&bytes).unwrap();
+    raw.crop = Rect::new(3, 2, 25, 19);
+    let plain = lightcraft_raw::write_dng(&raw, &Default::default()).unwrap();
+    raw.opcodes.list3 = vec![Opcode::WarpFisheye { planes: vec![[1.0, 0.03, 0.0, 0.0]], center: [0.375, 0.25] }];
+    let bytes = lightcraft_raw::write_dng(&raw, &Default::default()).unwrap();
+    let (source, info) = load_bytes(&bytes, 100).unwrap();
+    let (uncorrected, _) = load_bytes(&plain, 100).unwrap();
+    assert_eq!(source.data, uncorrected.data, "the render applies lens geometry exactly once");
+    let lens = info.lens.unwrap();
+    assert!(lens.stages[0].unwrap().fisheye);
+    assert_eq!(probe_bytes("fish.dng", &bytes).unwrap().embedded_lens, Some(lens));
+    let mut settings = lightcraft_develop::DevelopSettings::default();
+    settings.optics.lens_profile = true;
+    let original = Warp::from_settings(25.0, 19.0, &settings, Some(&lens));
+    // Compare to an independent full-active-area map, then translate into the crop.
+    let p = Point::new(15.5, 10.5);
+    let (cx, cy) = (0.375 * 31.0 + 0.5, 0.25 * 23.0 + 0.5);
+    let m = (31.0f64 * 0.625).hypot(23.0 * 0.75);
+    let (dx, dy) = (p.x + 3.0 - cx, p.y + 2.0 - cy);
+    let radius = dx.hypot(dy);
+    let theta = (radius / m).atan();
+    let f = m * (theta + 0.03 * theta.powi(3)) / radius;
+    let expected = Point::new(cx + dx * f - 3.0, cy + dy * f - 2.0);
+    assert!(original.corrected_to_source(p, 0).dist(expected) < 1e-10);
+    settings.optics.lens_profile = false;
+    assert_eq!(Warp::from_settings(25.0, 19.0, &settings, Some(&lens)).corrected_to_source(p, 0), p);
+    settings.optics.lens_profile = true;
+    for i in 1..=8 {
+        raw.orientation = Orientation::from_exif(i);
+        let lens = embedded_lens(&raw.info()).unwrap();
+        let (w, h) = if raw.orientation.swaps_axes() { (19.0, 25.0) } else { (25.0, 19.0) };
+        let wp = Warp::from_settings(w, h, &settings, Some(&lens));
+        let p = raw.orientation.map(p.x, p.y, 25.0, 19.0);
+        let expected = raw.orientation.map(expected.x, expected.y, 25.0, 19.0);
+        assert!(wp.corrected_to_source(Point::new(p.0, p.1), 0).dist(Point::new(expected.0, expected.1)) < 1e-10);
+    }
+    let encoded = serde_json::to_value(lens).unwrap();
+    assert_eq!(serde_json::from_value::<lightcraft_develop::EmbeddedLens>(encoded).unwrap(), lens);
+}

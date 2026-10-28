@@ -456,3 +456,97 @@ fn cropped_lens_corrections_correct_the_crop_like_the_whole() {
     assert!(warps[0].cropped(w, h, crate::Rect::new(30, 0, 70, 50)).is_none());
     assert!(warps[0].cropped(w, h, crate::Rect::new(usize::MAX, 0, 70, 50)).is_none());
 }
+
+// The ramp makes bilinear resampling exact. Expected coordinates are derived directly from
+// the DNG specification's theta polynomial, independently of the implementation's Horner form.
+#[test]
+fn fisheye_applies_the_spec_mapping_per_plane() {
+    let img = Rgb32f::from_fn(65, 49, |x, y| [x as f32, y as f32, (x + y) as f32]);
+    let k = [[1.0, 0.1, 0.02, 0.003], [0.9, 0.05, 0.0, 0.0], [1.05, -0.02, 0.01, 0.0]];
+    let center = [0.375, 0.25];
+    let list = [Opcode::WarpFisheye { planes: k.to_vec(), center }];
+    assert!(list[0].is_applied() && list[0].is_lens_correction());
+    let mut out = img.clone();
+    apply_list3(&parse_list(&write_list(&list)), &mut out);
+    let (cx, cy) = (24.0f64, 12.0f64);
+    let m = 40.0f64.hypot(36.0);
+    for (x, y) in [(24, 12), (35, 20), (50, 35), (4, 5)] {
+        for c in 0..3 {
+            let (dx, dy) = (x as f64 - cx, y as f64 - cy);
+            let radius = dx.hypot(dy);
+            let theta = (radius / m).atan();
+            let s = if radius == 0.0 {
+                0.0
+            } else {
+                m * (k[c][0] * theta + k[c][1] * theta.powi(3) + k[c][2] * theta.powi(5) + k[c][3] * theta.powi(7)) / radius
+            };
+            let (sx, sy) = (cx + dx * s, cy + dy * s);
+            let expected = [sx, sy, sx + sy][c];
+            assert!((f64::from(out.get(x, y)[c]) - expected).abs() < 2e-5, "{x},{y}, plane {c}");
+        }
+    }
+    assert_ne!(out.data, img.data, "opcode 2 must actually move pixels");
+    assert_eq!(out.get(24, 12), img.get(24, 12));
+    let shared = warp_fisheye(&img, &k[..1], center);
+    let three = warp_fisheye(&img, &[k[0]; 3], center);
+    assert_eq!(shared.data, three.data);
+}
+
+#[test]
+fn fisheye_order_skip_rule_and_pass_limit() {
+    let img = Rgb32f::from_fn(25, 19, |x, y| [x as f32, y as f32, 0.5]);
+    let fish = Opcode::WarpFisheye { planes: vec![[1.0, 0.0, 0.0, 0.0]], center: [0.5, 0.5] };
+    let wr = Opcode::WarpRectilinear { planes: vec![[0.8, 0.0, 0.0, 0.0, 0.0, 0.0]], center: [0.4, 0.6] };
+    let mut sequential = img.clone();
+    apply_list3(std::slice::from_ref(&fish), &mut sequential);
+    apply_list3(std::slice::from_ref(&wr), &mut sequential);
+    let mut ordered = img.clone();
+    apply_list3(&[fish.clone(), wr], &mut ordered);
+    assert_eq!(ordered.data, sequential.data);
+    let optional = Opcode::WarpRectilinear2 { planes: vec![wr2_set(&[(0, 1.0)])], center: [0.5, 0.5], reciprocal: false, optional: true };
+    let mut skipped = img.clone();
+    apply_list3(&[optional, fish.clone()], &mut skipped);
+    assert_eq!(skipped.data, img.data);
+    let mut capped = img.clone();
+    apply_list3(&vec![fish.clone(); MAX_LIST3_PASSES * 2], &mut capped);
+    let mut expected = img;
+    apply_list3(&vec![fish; MAX_LIST3_PASSES], &mut expected);
+    assert_eq!(capped.data, expected.data);
+}
+
+#[test]
+fn fisheye_hostile_parameters_and_small_images_are_safe() {
+    for (w, h) in [(0, 0), (1, 1), (1, 5), (5, 1), (7, 9)] {
+        let img = Rgb32f::filled(w, h, [0.4; 3]);
+        for planes in [vec![], vec![[1.0; 4]; 2], vec![[f64::MAX; 4]], vec![[f64::NAN; 4]], vec![[1.0, 0.0, 0.0, 0.0]]] {
+            for center in [[0.5, 0.5], [0.0, 0.0], [f64::MAX; 2], [f64::NAN; 2]] {
+                let out = warp_fisheye(&img, &planes, center);
+                assert!(out.data.iter().flatten().all(|v| v.is_finite()));
+                assert_eq!((out.width, out.height), (w, h));
+            }
+        }
+    }
+    let valid = write_list(&[Opcode::WarpFisheye { planes: vec![[1.0, 0.0, 0.0, 0.0]], center: [0.5, 0.5] }]);
+    for n in 0..valid.len() {
+        assert!(parse_list(&valid[..n]).iter().all(|op| !matches!(op, Opcode::WarpFisheye { .. })));
+    }
+}
+
+#[test]
+fn malformed_fisheye_records_remain_unknown() {
+    for planes in [vec![[1.0; 4]; 2], vec![[f64::MAX; 4]], vec![[f64::NAN; 4]]] {
+        let bytes = write_list(&[Opcode::WarpFisheye { planes, center: [0.5, 0.5] }]);
+        assert!(matches!(parse_list(&bytes).as_slice(), [Opcode::Unknown { id: 2, .. }]));
+    }
+    let mut params = 1u32.to_be_bytes().to_vec();
+    params.extend(be(&[1.0, 0.0, 0.0, 0.0, 0.5, 0.5]));
+    params.push(0);
+    assert!(matches!(parse_list(&ListWriter::new().op(2, &params).finish()).as_slice(), [Opcode::Unknown { id: 2, .. }]));
+}
+
+#[test]
+fn fisheye_malformed_buffers_do_not_allocate_or_index_by_declared_dimensions() {
+    for img in [Rgb32f { width: usize::MAX, height: 2, data: Vec::new() }, Rgb32f { width: 3, height: 2, data: vec![[0.5; 3]] }] {
+        assert_eq!(warp_fisheye(&img, &[[1.0, 0.0, 0.0, 0.0]], [0.5, 0.5]), img);
+    }
+}

@@ -3,7 +3,7 @@
 //! Parsed: every opcode (unknown ones are kept as [`Opcode::Unknown`]). Applied: `WarpRectilinear`,
 //! `WarpRectilinear2` (opcode 14, DNG 1.6; see [`Opcode::WarpRectilinear2`]), `FixVignetteRadial`,
 //! `FixBadPixelsConstant`, `FixBadPixelsList`, `MapTable`, `MapPolynomial`, `GainMap`, `DeltaPerRow/Column`,
-//! `ScalePerRow/Column`. `TrimBounds` and `WarpFisheye` are recorded but not applied.
+//! `ScalePerRow/Column`, `WarpFisheye`. `TrimBounds` is recorded but not applied.
 //!
 //! Opcodes run in list order, except for the DNG 1.6 skip rule ([`applied_ops`]): a `WarpRectilinear` or
 //! `WarpFisheye` that immediately follows an *optional* `WarpRectilinear2` is skipped (the older opcode is the
@@ -120,14 +120,17 @@ pub enum Opcode {
 impl Opcode {
     /// Whether [`apply_list`] / [`apply_list3`] implement this opcode.
     pub fn is_applied(&self) -> bool {
-        !matches!(self, Opcode::Unknown { .. } | Opcode::TrimBounds { .. } | Opcode::WarpFisheye { .. })
+        !matches!(self, Opcode::Unknown { .. } | Opcode::TrimBounds { .. })
     }
 
-    /// Whether this is a lens correction (`WarpRectilinear`, `WarpRectilinear2`, `FixVignetteRadial`): from a DNG, or
+    /// Whether this is a lens correction (`WarpRectilinear`, `WarpRectilinear2`, `WarpFisheye`, `FixVignetteRadial`): from a DNG, or
     /// the equivalent of a camera's own correction recorded in its raw (Panasonic RW2). Developers that apply these
     /// through the "profile corrections" of the develop settings remove them before demosaicing.
     pub fn is_lens_correction(&self) -> bool {
-        matches!(self, Opcode::WarpRectilinear { .. } | Opcode::WarpRectilinear2 { .. } | Opcode::FixVignetteRadial { .. })
+        matches!(
+            self,
+            Opcode::WarpRectilinear { .. } | Opcode::WarpRectilinear2 { .. } | Opcode::WarpFisheye { .. } | Opcode::FixVignetteRadial { .. }
+        )
     }
 
     /// This lens correction re-expressed for the part `crop` of the `width × height` image it was written for: applied
@@ -135,6 +138,8 @@ impl Opcode {
     /// coefficients are rescaled for the crop's farthest corner, the radius every coordinate is normalised by. Centres
     /// use the warps' convention (0 and 1 at the first and last pixel), also for `FixVignetteRadial`, as the develop
     /// pipeline reads them. `None` for other opcodes, an image or crop under 2 × 2, or a crop outside the image.
+    /// `WarpFisheye` cannot be reframed this way: atan(s r) is not a finite polynomial in atan(r).
+    /// A caller exporting cropped pixels must materialise that correction before cropping.
     pub fn cropped(&self, width: usize, height: usize, crop: crate::Rect) -> Option<Opcode> {
         let fits = crop.x.checked_add(crop.width).is_some_and(|r| r <= width) && crop.y.checked_add(crop.height).is_some_and(|b| b <= height);
         if width < 2 || height < 2 || crop.width < 2 || crop.height < 2 || !fits {
@@ -301,7 +306,11 @@ fn parse_warp(id: u32, flags: u32, reader: &mut Rd<'_>) -> Option<Opcode> {
         }
         2 => {
             let planes = parse_planes(reader, 4, |r| Some([r.finite_f64()?, r.finite_f64()?, r.finite_f64()?, r.finite_f64()?]))?;
-            Some(Opcode::WarpFisheye { planes, center: [reader.finite_f64()?, reader.finite_f64()?] })
+            let center = [reader.finite_f64()?, reader.finite_f64()?];
+            if !matches!(planes.len(), 1 | 3) || reader.remaining() != 0 || planes.iter().flatten().chain(center.iter()).any(|v| v.abs() > 1e9) {
+                return None;
+            }
+            Some(Opcode::WarpFisheye { planes, center })
         }
         3 => Some(Opcode::FixVignetteRadial {
             k: [reader.finite_f64()?, reader.finite_f64()?, reader.finite_f64()?, reader.finite_f64()?, reader.finite_f64()?],
@@ -719,7 +728,13 @@ pub fn apply_list3(list: &[Opcode], img: &mut Rgb32f) {
                     *img = warp_rectilinear2(img, planes, *center, *reciprocal);
                 }
             }
-            Opcode::WarpFisheye { .. } | Opcode::TrimBounds { .. } | Opcode::Unknown { .. } => {}
+            Opcode::WarpFisheye { planes, center } => {
+                if passes < MAX_LIST3_PASSES {
+                    passes += 1;
+                    *img = warp_fisheye(img, planes, *center);
+                }
+            }
+            Opcode::TrimBounds { .. } | Opcode::Unknown { .. } => {}
             other => {
                 if passes >= MAX_LIST3_PASSES {
                     continue;
@@ -784,6 +799,42 @@ pub fn warp_rectilinear2(img: &Rgb32f, planes: &[[f64; WR2_LEN]], center: [f64; 
                 };
                 let (fx, fy) = (cx + m * sx, cy + m * sy);
                 *v = img.sample_bilinear(fx as f32 + 0.5, fy as f32 + 0.5)[c];
+            }
+        }
+    });
+    out
+}
+
+/// DNG specification 1.6.0.0, chapter 7, WarpFisheye (pp. 92–94): inverse map with
+/// theta = atan(r) and source radius k0 theta + k1 theta³ + k2 theta⁵ + k3 theta⁷.
+/// A single coefficient set serves all planes; RGB may instead carry three sets.
+/// Malformed parameters leave the image unchanged, as do other unapplicable opcodes.
+pub fn warp_fisheye(img: &Rgb32f, planes: &[[f64; 4]], center: [f64; 2]) -> Rgb32f {
+    let (w, h) = (img.width, img.height);
+    if w == 0
+        || h == 0
+        || w.checked_mul(h) != Some(img.data.len())
+        || !matches!(planes.len(), 1 | 3)
+        || center.iter().any(|v| !v.is_finite() || v.abs() > 1e9)
+        || planes.iter().flatten().any(|v| !v.is_finite() || v.abs() > 1e9)
+    {
+        return img.clone();
+    }
+    let (cx, cy) = (center[0] * (w as f64 - 1.0), center[1] * (h as f64 - 1.0));
+    let m = max_radius(cx, cy, w as f64 - 1.0, h as f64 - 1.0);
+    let mut out = Rgb32f::new(w, h);
+    lightcraft_raster::par_rows(&mut out.data, w, |y, row| {
+        for (x, px) in row.iter_mut().enumerate() {
+            let dx = (x as f64 - cx) / m;
+            let dy = (y as f64 - cy) / m;
+            let r = dx.hypot(dy);
+            let theta = r.atan();
+            let t2 = theta * theta;
+            for (c, v) in px.iter_mut().enumerate() {
+                let Some(k) = planes.get(if planes.len() == 1 { 0 } else { c }) else { continue };
+                let ratio = if r == 0.0 { 1.0 } else { theta / r };
+                let f = ratio * (k[0] + t2 * (k[1] + t2 * (k[2] + t2 * k[3])));
+                *v = img.sample_bilinear((cx + m * dx * f) as f32 + 0.5, (cy + m * dy * f) as f32 + 0.5)[c];
             }
         }
     });

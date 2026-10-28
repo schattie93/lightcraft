@@ -941,3 +941,24 @@ fn soft_proofs_match() {
     };
     assert!(lightcraft_gpu::render(&src, &raw, &DevelopSettings::default(), &req, None).is_none(), "declined: the CPU renders it");
 }
+
+#[test]
+fn fisheye_cpu_geometry_matches_gpu_render() {
+    if !gpu() {
+        return;
+    }
+    use lightcraft_develop::{EmbeddedLens, EmbeddedWarpStage};
+    let src = Arc::new(Rgb32f::from_fn(96, 72, |x, y| [x as f32 / 96.0, y as f32 / 72.0, ((x / 8 + y / 8) % 2) as f32]));
+    let mut planes = [[0.0; 19]; 3];
+    for (i, k) in planes.iter_mut().enumerate() {
+        k[0] = 1.0 + i as f64 * 0.01;
+        k[1] = 0.03;
+    }
+    let st = EmbeddedWarpStage { planes, center: Point::new(0.375, 0.25), radius: 0.8, reciprocal: false, fisheye: true };
+    let info = SourceInfo { lens: Some(EmbeddedLens { stages: [Some(st), None, None], ..Default::default() }), ..Default::default() };
+    let mut s = DevelopSettings::default();
+    s.optics.lens_profile = true;
+    check("fisheye CPU geometry", &src, &info, &s, &RenderRequest::fit(80, 60));
+    s.orientation = Orientation::Rotate90;
+    check("fisheye rotated", &src, &info, &s, &RenderRequest::fit(40, 50));
+}

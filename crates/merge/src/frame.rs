@@ -216,7 +216,11 @@ fn raw_frame(
     // The DNG 1.6 skip rule is applied here, so no `WarpRectilinear2` is left optional.
     let (aw, ah) = (raw.active_area.width, raw.active_area.height);
     let crop = raw.develop_crop(aw, ah);
+    // Fisheye's atan radius cannot be reframed as four coefficients after a crop. Materialise
+    // the whole ordered lens list before cropping instead of losing it or writing a wrong map.
+    let bake_lens = lightcraft_raw::opcodes::applied_ops(&raw.opcodes.list3).any(|op| matches!(op, Opcode::WarpFisheye { .. }));
     let lens = lightcraft_raw::opcodes::applied_ops(&raw.opcodes.list3)
+        .filter(|_| !bake_lens)
         .filter(|op| op.is_lens_correction())
         .filter_map(|op| op.cropped(aw, ah, crop))
         .map(|op| match op {
@@ -224,7 +228,9 @@ fn raw_frame(
             op => op,
         })
         .collect();
-    raw.opcodes.list3.retain(|op| !op.is_lens_correction());
+    if !bake_lens {
+        raw.opcodes.list3.retain(|op| !op.is_lens_correction());
+    }
     if let Some(color) = colour(&mut raw, bytes) {
         raw.color = color;
     }
@@ -264,6 +270,20 @@ fn raw_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fisheye_merge_materialises_geometry_before_cropping() {
+        let mut raw = mosaic(None);
+        raw.crop = lightcraft_raw::Rect::new(2, 1, 12, 9);
+        raw.opcodes.list3 = vec![
+            Opcode::WarpFisheye { planes: vec![[1.0, 0.0, 0.0, 0.0]], center: [0.4, 0.6] },
+            Opcode::WarpRectilinear { planes: vec![[0.9, 0.0, 0.0, 0.0, 0.0, 0.0]], center: [0.5, 0.5] },
+        ];
+        let expected = raw.develop(lightcraft_raw::Method::Ahd).unwrap();
+        let frame = frame_of(raw, &|_, _| None);
+        assert_eq!(frame.image.data, expected.data);
+        assert!(frame.lens.is_empty(), "already applied, never write a second correction to the merged DNG");
+    }
 
     #[test]
     fn exposure_from_exif() {

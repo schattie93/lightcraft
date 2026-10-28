@@ -64,16 +64,30 @@ pub fn embedded_lens(raw: &lightcraft_raw::RawInfo) -> Option<lightcraft_develop
     // opcodes in list order, minus the ones the DNG 1.6 skip rule drops (a WarpRectilinear that follows an optional
     // WarpRectilinear2)
     let ops: Vec<&Opcode> = lightcraft_raw::opcodes::applied_ops(&raw.opcodes.list3).collect();
-    // A DNG with a WarpRectilinear2 keeps every warp opcode as a chain of stages (each warps the one before's output);
+    // A DNG with WarpRectilinear2 or WarpFisheye keeps every warp as a chain of stages;
     // without one the first WarpRectilinear is the lens warp, as it always was.
-    let chain = ops.iter().any(|op| matches!(op, Opcode::WarpRectilinear2 { .. }));
+    let chain = ops.iter().any(|op| matches!(op, Opcode::WarpRectilinear2 { .. } | Opcode::WarpFisheye { .. }));
     let mut stages = Vec::new();
     for op in ops {
         match op {
+            Opcode::WarpFisheye { planes, center } => {
+                let rgb = match planes.as_slice() {
+                    [k] => [*k; 3],
+                    [r, g, b] => [*r, *g, *b],
+                    _ => continue,
+                };
+                let (center, radius) = centre(*center);
+                let planes = rgb.map(|k| {
+                    let mut s = [0.0; lightcraft_raw::opcodes::WR2_LEN];
+                    s[..4].copy_from_slice(&k);
+                    s
+                });
+                stages.push(EmbeddedWarpStage { planes, center, radius, reciprocal: false, fisheye: true });
+            }
             Opcode::WarpRectilinear2 { planes, center, reciprocal, .. } if !planes.is_empty() => {
                 let (center, radius) = centre(*center);
                 let p = |i: usize| planes[i.min(planes.len() - 1)];
-                stages.push(EmbeddedWarpStage { planes: [p(0), p(1), p(2)], center, radius, reciprocal: *reciprocal });
+                stages.push(EmbeddedWarpStage { planes: [p(0), p(1), p(2)], center, radius, reciprocal: *reciprocal, fisheye: false });
             }
             Opcode::WarpRectilinear { planes, center } if chain && !planes.is_empty() => {
                 // WarpRectilinear is the even-power case: kr0 + kr1 r² + kr2 r⁴ + kr3 r⁶, no radius limit
@@ -90,7 +104,7 @@ pub fn embedded_lens(raw: &lightcraft_raw::RawInfo) -> Option<lightcraft_develop
                     s[18] = 1e6;
                     s
                 };
-                stages.push(EmbeddedWarpStage { planes: [p(0), p(1), p(2)], center, radius, reciprocal: false });
+                stages.push(EmbeddedWarpStage { planes: [p(0), p(1), p(2)], center, radius, reciprocal: false, fisheye: false });
             }
             Opcode::WarpRectilinear { planes, center } if !chain && !planes.is_empty() && lens.warp.is_none() => {
                 let (center, radius) = centre(*center);

@@ -1131,3 +1131,23 @@ fn legacy_lightcraft_dng_keeps_the_sensor_anchored_pattern() {
     assert_eq!(build("Adobe Photoshop Lightroom").cfa.unwrap().name(), "BGGR");
     assert_ne!(lightcraft_raw::dngwrite::SOFTWARE, "LightCraft");
 }
+
+#[test]
+fn fisheye_dng_roundtrip_develops_the_recorded_geometry() {
+    let mut raw = synthetic(65, 49, None, 3);
+    raw.active_area = Rect::new(0, 0, 65, 49);
+    raw.crop = Rect::new(4, 3, 54, 39);
+    let plain = raw.develop(Method::Bilinear).unwrap();
+    raw.opcodes.list3 = vec![Opcode::WarpFisheye { planes: vec![[1.0, 0.03, 0.0, 0.0]], center: [0.4, 0.6] }];
+    let bytes = write_dng(&raw, &DngWriteOptions::default()).unwrap();
+    let decoded = decode(&bytes).unwrap();
+    assert_eq!(decoded.opcodes, raw.opcodes);
+    assert_eq!(lightcraft_raw::probe_info(&bytes).unwrap().opcodes, raw.opcodes);
+    let developed = decoded.develop(Method::Bilinear).unwrap();
+    assert_eq!((developed.width, developed.height), (54, 39));
+    assert_ne!(developed.data, plain.data);
+    let mut expected = lightcraft_raw::demosaic(&decoded.normalized().unwrap(), Method::Bilinear);
+    lightcraft_raw::opcodes::apply_list3(&raw.opcodes.list3, &mut expected);
+    let expected = expected.crop(4, 3, 54, 39);
+    assert_eq!(developed.data, expected.data);
+}
