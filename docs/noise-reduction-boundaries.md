@@ -186,4 +186,26 @@ LIGHTCRAFT_GPU=0 cargo run -p lightcraft-cli -- render corpus/raw/cr2-canon-5d3.
   -o /tmp/eos-5d3.png --size 1600 --set detail.nrLuminance=40 --set detail.nrColor=50
 ```
 
-The PR remains a draft while the upstream CI blocker prevents a green full gate.
+## Publication result
+
+The implementation is committed and pushed to
+[schattie93/lightcraft, fix/nr-shadow-luminance-bounds](https://github.com/schattie93/lightcraft/tree/fix/nr-shadow-luminance-bounds).
+Only @schattie93 is credited as the commit author.
+
+Creating the intended draft PR against `storytold/lightcraft:main` was attempted
+through the connected GitHub tool, `gh pr create` (GraphQL), and the REST
+`POST /repos/storytold/lightcraft/pulls` endpoint. All three return HTTP 403 /
+`Resource not accessible by integration`. The environment's authenticated
+`GET /user` confirms `schattie93`, and pushing to the fork succeeds. No PR was
+created; the remaining blocker is the integration's permission on the upstream
+PR-creation operation. No credentials or repository permissions were changed.
+
+[Review the branch / open the PR comparison](https://github.com/storytold/lightcraft/compare/main...schattie93:fix/nr-shadow-luminance-bounds?expand=1).
+The intended PR should remain a draft while the unchanged upstream Clippy failure
+prevents a green full gate. Its prepared title is
+`LR-EDIT-DETAIL-CNR: preserve deep shadows and bound noise reduction`.
+
+Merge-tree checks against the fetched open PR heads found these conflicts:
+#1348 / #1349: parity and What's New docs only; #1714: `local.rs`, gaps and parity
+among this branch's files; #2598: `local.rs`, GPU registration/render/map shader,
+and parity. These are conflict checks, not successful integration tests.
