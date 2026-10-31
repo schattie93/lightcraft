@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-24 · **Change:** minor (KEYC-METADATA: ⌘⌥⇧C / ⌘⌥⇧V Copy / Paste Metadata; KEYC-RATING: ⌘L Enable Filters; context menus: a right-click elsewhere on the same widget moves its open menu instead of flashing it, issue #1877; Reference Escape, catalog-local pins and deleted-photo handling verified on Windows; KEYC-RATING: `\` shows / hides the Filter Bar in the grids; earlier: zoom row soft proofing sharp at 1:1, canvas tools by keyboard, focus-order test, ~50 unnamed hand-drawn widgets named; KEYC-METADATA: ⌥0 / ⌥⇧0 next / previous keyword set; KEYC-RATING: ⌘L Enable Filters; context menus: a right-click elsewhere on the same widget moves its open menu instead of flashing it, issue #1877; Reference Escape, catalog-local pins and deleted-photo handling verified on Windows; KEYC-RATING: `\` shows / hides the Filter Bar in the grids; earlier: zoom row soft proofing sharp at 1:1, canvas tools by keyboard, focus-order test, ~50 unnamed hand-drawn widgets named; KEYC-METADATA: ⌘K Add Keywords; KEYC-RATING: ⌘L Enable Filters; context menus: a right-click elsewhere on the same widget moves its open menu instead of flashing it, issue #1877; Reference Escape, catalog-local pins and deleted-photo handling verified on Windows; KEYC-RATING: `\` shows / hides the Filter Bar in the grids; earlier: zoom row soft proofing sharp at 1:1, canvas tools by keyboard, focus-order test, ~50 unnamed hand-drawn widgets named) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-31 · **Change:** minor (Accessibility: Brush and Red Eye gain keyboard stand-ins for painting a dab / adding and selecting a correction, 75% → 78%; earlier: KEYC-METADATA: ⌘⌥⇧C / ⌘⌥⇧V Copy / Paste Metadata; KEYC-RATING: ⌘L Enable Filters; context menus: a right-click elsewhere on the same widget moves its open menu instead of flashing it, issue #1877; Reference Escape, catalog-local pins and deleted-photo handling verified on Windows; KEYC-RATING: `\` shows / hides the Filter Bar in the grids; earlier: zoom row soft proofing sharp at 1:1, canvas tools by keyboard, focus-order test, ~50 unnamed hand-drawn widgets named; KEYC-METADATA: ⌥0 / ⌥⇧0 next / previous keyword set; KEYC-RATING: ⌘L Enable Filters; context menus: a right-click elsewhere on the same widget moves its open menu instead of flashing it, issue #1877; Reference Escape, catalog-local pins and deleted-photo handling verified on Windows; KEYC-RATING: `\` shows / hides the Filter Bar in the grids; earlier: zoom row soft proofing sharp at 1:1, canvas tools by keyboard, focus-order test, ~50 unnamed hand-drawn widgets named; KEYC-METADATA: ⌘K Add Keywords; KEYC-RATING: ⌘L Enable Filters; context menus: a right-click elsewhere on the same widget moves its open menu instead of flashing it, issue #1877; Reference Escape, catalog-local pins and deleted-photo handling verified on Windows; KEYC-RATING: `\` shows / hides the Filter Bar in the grids; earlier: zoom row soft proofing sharp at 1:1, canvas tools by keyboard, focus-order test, ~50 unnamed hand-drawn widgets named) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 How LightCraft's interaction compares with Lightroom's: views, panels, tools and handles, modifier
 keys, shortcuts, zoom, context menus and feel. Rows for individual menu items and shortcuts live in
@@ -32,11 +32,11 @@ assessment and the notes that don't fit a row. Visual reference for agents: `pla
 | Shortcuts | Lightroom desktop and Classic keymaps | Lightroom-desktop keymap with Classic additions, editable | 85% | deliberate differences below; no Classic keymap layer |
 | Context menus | everywhere | 31 sites (grid, filmstrip, albums, folders, keywords, masks, presets, text fields…), all through `widgets::context_menu` (`crates/ui-egui/src/widgets.rs`): a right-click elsewhere while a menu is open closes it and opens the menu there, also on the same widget (issue #1877: that one flashed at the new spot and closed, as egui counts the opening click as a click while open) | 70% | unaudited against Lightroom's menus item by item |
 | Text fields | native editing behaviour | custom text field (LR-BEHAV-TEXTFIELD) | 70% | IME and selection edge cases |
-| Accessibility | VoiceOver / Narrator, keyboard navigation | AccessKit tree audited by a test in every view, Develop tool and the main dialogs: every control named, sliders with value, range and Increment / Decrement, dialogs titled, tool sliders reachable with Tab; crop handles, spots, gradient handles and mask pins by keyboard | 75% | brush strokes and red-eye ellipses need the pointer; not tried with a real screen reader ([audit](#accessibility-audit)) |
+| Accessibility | VoiceOver / Narrator, keyboard navigation | AccessKit tree audited by a test in every view, Develop tool and the main dialogs: every control named, sliders with value, range and Increment / Decrement, dialogs titled, tool sliders reachable with Tab; crop handles, spots, gradient handles, mask pins, a brush dab and a new red-eye correction by keyboard | 78% | moving or resizing an existing brush stroke or red-eye correction still needs the pointer; not tried with a real screen reader ([audit](#accessibility-audit)) |
 | Feel and responsiveness | GPU-interactive sliders (15.3) | ≤ 16 ms slider budget on GPU; background renders | 75% | colour NR at half resolution, 100k-photo grid test |
 | **UI/UX overall** | | | **~70%** | estimated, weighted by use (develop and library 60%, tools 25%, rest 15%) |
 
-Remaining: **32–54 h** (zoom detail 8–15 h, brush and masking feel 8–12 h, accessibility 2–4
+Remaining: **31–52 h** (zoom detail 8–15 h, brush and masking feel 8–12 h, accessibility 1–2
 h, Classic keymap layer 4–8 h, context-menu audit 4–8 h, text-field and IME polish 4–8 h). Output
 modules and AI tools are counted with their features in [target-app-parity.md](target-app-parity.md).
 
@@ -106,18 +106,24 @@ Found and fixed (2026-10-12): 47 problems in the views and tools, 11 more in the
 Keyboard reach: Crop (angle, offsets, scale, aspect) and Remove (size, feather, opacity) settings
 are reached with Tab and adjusted with the arrow keys (tested).
 
-Canvas tools by keyboard (`crates/ui-egui/src/canvas_keys.rs`, tests in `tests_canvas_keys.rs`):
-every handle drawn on the photo has an invisible stand-in that takes the focus. Tab reaches it, a
-screen reader reads its name and position ("Crop bottom-right corner", "left 0%, top 0%, right
-100%, bottom 100%"; "Spot 1", "x 30%, y 60%, size 5%"), and the arrow keys move it by 0.5% of the
-photo (Shift: 5%), one undo step per press. While it has the focus it keeps the arrows, Return
-and Space, and the app's other shortcuts still work.
+Canvas tools by keyboard (`crates/ui-egui/src/canvas_keys.rs`, tests in
+`crates/ui-egui/src/tests/canvas_keys.rs`): every handle drawn on the photo has an invisible
+stand-in that takes the focus. Tab reaches it, a screen reader reads its name and position ("Crop
+bottom-right corner", "left 0%, top 0%, right 100%, bottom 100%"; "Spot 1", "x 30%, y 60%, size
+5%"), and the arrow keys move it by 0.5% of the photo (Shift: 5%), one undo step per press. While
+it has the focus it keeps the arrows, Return and Space, and the app's other shortcuts still work.
 - Crop: four corners, four edges and the whole box (`crop.drag`, so the aspect lock and image
   bounds apply as they do for a drag); Return applies the crop.
 - Remove: each spot's target and source; a "New spot" point that starts at the centre, moves
   with the arrows, and turns into a spot of the brush's size when you press Return.
 - Masking: the four edges and the rotation handle of a radial gradient, the start and end of a
-  linear one, and each mask pin (moving one selects its mask).
+  linear one, and each mask pin (moving one selects its mask); in the Brush tool, a "New brush
+  dab" point that moves with the arrows and paints a single dab there (the brush's current size,
+  feather and flow, Add or Erase as the panel or a held Alt has it) when you press Return, the
+  same as an un-dragged click would.
+- Red Eye: each correction's centre, where Return selects it as a click would; a "New red eye
+  correction" point that moves with the arrows and adds a correction there, at the default size
+  and the panel's Red Eye / Pet Eye choice, when you press Return, the same as a drag would.
 
 Focus order: the audit now also counts any widget that takes the focus or a click, whatever its
 role. That found about 50 hand-drawn icons, tiles and rows with no name: top-bar icons, flags and
@@ -127,8 +133,9 @@ through the Edit, Crop, Remove and Masking panels and checks that it goes top to
 strip beside them is its own column, walked first). No reordering was needed once nothing
 unnamed was in the way.
 
-Not done: brush strokes and red-eye ellipses still need a pointer. Nobody has tried the app with
-a real screen reader on any platform yet.
+Not done: moving or resizing an existing brush stroke or red-eye correction (neither has a pointer
+drag for that either — only painting/creating and, for red eye, selecting) still needs a pointer.
+Nobody has tried the app with a real screen reader on any platform yet.
 
 ## Reference view lifecycle
 
@@ -152,6 +159,7 @@ establish OS keyboard delivery or cross-platform acceptance.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-31 | minor | Accessibility: the Brush tool gains a "New brush dab" keyboard stand-in (Return paints a single dab) and Red Eye gains "New red eye correction" and a per-correction stand-in (Return adds / selects); moving or resizing an existing stroke or correction still needs the pointer, and so does a real screen-reader session; 75% → 78% |
 | 2026-10-24 | patch | KEYC-METADATA: ⌘⌥⇧C / ⌘⌥⇧V (Ctrl+Alt+Shift+C / V on Windows and Linux) copy and paste metadata |
 | 2026-10-24 | minor | KEYC-METADATA: ⌥0 / ⌥⇧0 (Alt+0 / Alt+Shift+0) go to the next / previous keyword set, Recent Keywords first, wrapping around at either end |
 | 2026-10-24 | minor | KEYC-METADATA: ⌘K / Ctrl+K (Add Keywords) shows the Keywords panel with the cursor in its Add keyword box |
