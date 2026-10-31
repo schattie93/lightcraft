@@ -340,6 +340,9 @@ pub(super) fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &eg
         return;
     }
     if app.ui.tool == "brush" {
+        if brush_keys(app, ui, map) {
+            return;
+        }
         brush_tool(app, ui, resp, map, p, clip);
         return;
     }
@@ -521,6 +524,42 @@ fn brush_tool(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response,
                    "erase": erase, "autoMask": app.ui.brush_auto_mask, "pressure": pressure, "connect": connect}),
         );
     }
+}
+
+/// Keyboard stand-in for the Brush tool: a placement point the arrows move; Return paints a
+/// single dab there, at the brush's current size, feather and flow, Add or Erase as the panel
+/// (or a held Alt) has it — the same as a click without a drag would.
+fn brush_keys(app: &mut LightcraftApp, ui: &mut egui::Ui, map: &CanvasMap) -> bool {
+    let key = egui::Id::unique("lc-brush-placement");
+    let place: (f64, f64) = ui.data(|m| m.get_temp(key)).unwrap_or((0.5, 0.5));
+    let q = map.screen(Point::new(place.0, place.1));
+    let keys = crate::canvas_keys::handle(
+        ui,
+        "brush:new",
+        crate::i18n::tr("New brush dab (Return paints it here)"),
+        crate::canvas_keys::position_text(place.0, place.1),
+        q,
+    );
+    if let Some((dx, dy)) = keys.delta {
+        let moved = ((place.0 + dx).clamp(0.0, 1.0), (place.1 + dy).clamp(0.0, 1.0));
+        ui.data_mut(|m| m.insert_temp(key, moved));
+    }
+    if crate::canvas_keys::has_focus(ui.ctx()) && ui.memory(|m| m.has_focus(crate::canvas_keys::id("brush:new"))) {
+        let long = (map.rect.width().max(map.rect.height())) as f64;
+        let r = (app.ui.brush_size as f64 * long) as f32;
+        ui.painter().circle_stroke(q, r, Stroke::new(1.0, Color32::WHITE));
+    }
+    if keys.activated {
+        let alt = ui.input(|i| i.modifiers.alt);
+        let erase = app.ui.brush_erase != alt;
+        let _ = app.run(
+            "mask.brushStroke",
+            json!({"points": [[place.0, place.1]], "size": app.ui.brush_size, "feather": app.ui.brush_feather, "flow": app.ui.brush_flow,
+                   "erase": erase, "autoMask": app.ui.brush_auto_mask}),
+        );
+        return true;
+    }
+    false
 }
 
 /// Grabbing mask grips and component bodies: select, drag, release.

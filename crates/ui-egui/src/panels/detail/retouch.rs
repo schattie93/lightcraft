@@ -198,15 +198,20 @@ pub(super) fn eye_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egu
     let o = map.screen(Point::new(0.0, 0.0));
     let (sx, sy) = (map.screen(Point::new(1.0, 0.0)).distance(o), map.screen(Point::new(0.0, 1.0)).distance(o));
     let per_long = sx.max(sy);
-    let p = ui.painter();
-    for (i, e) in d.red_eye.iter().enumerate() {
-        let c = map.screen(e.center);
-        let r = vec2(e.rx as f32 * per_long, e.ry as f32 * per_long);
-        let sel = i == app.ui.eye;
-        let col = if sel { Color32::WHITE } else { Color32::from_white_alpha(150) };
-        p.add(egui::Shape::ellipse_stroke(c, r, Stroke::new(if sel { 1.5 } else { 1.0 }, col)));
-        p.line_segment([c - vec2(4.0, 0.0), c + vec2(4.0, 0.0)], Stroke::new(1.0, col));
-        p.line_segment([c - vec2(0.0, 4.0), c + vec2(0.0, 4.0)], Stroke::new(1.0, col));
+    {
+        let p = ui.painter();
+        for (i, e) in d.red_eye.iter().enumerate() {
+            let c = map.screen(e.center);
+            let r = vec2(e.rx as f32 * per_long, e.ry as f32 * per_long);
+            let sel = i == app.ui.eye;
+            let col = if sel { Color32::WHITE } else { Color32::from_white_alpha(150) };
+            p.add(egui::Shape::ellipse_stroke(c, r, Stroke::new(if sel { 1.5 } else { 1.0 }, col)));
+            p.line_segment([c - vec2(4.0, 0.0), c + vec2(4.0, 0.0)], Stroke::new(1.0, col));
+            p.line_segment([c - vec2(0.0, 4.0), c + vec2(0.0, 4.0)], Stroke::new(1.0, col));
+        }
+    }
+    if eye_keys(app, ui, map, d) {
+        return;
     }
     if resp.hover_pos().is_some() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
@@ -221,7 +226,7 @@ pub(super) fn eye_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egu
         && let Some(q) = resp.interact_pointer_pos()
     {
         let (a, b) = (map.screen(a), q);
-        p.add(egui::Shape::ellipse_stroke(a.lerp(b, 0.5), ((b - a) / 2.0).abs(), Stroke::new(1.0, Color32::WHITE)));
+        ui.painter().add(egui::Shape::ellipse_stroke(a.lerp(b, 0.5), ((b - a) / 2.0).abs(), Stroke::new(1.0, Color32::WHITE)));
     }
     if resp.drag_stopped()
         && let Some(Gesture::Eye { a }) = app.gesture.take()
@@ -246,4 +251,44 @@ pub(super) fn eye_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egu
     {
         app.ui.eye = i;
     }
+}
+
+/// Keyboard stand-ins for the Red Eye tool: each correction's centre (Return selects it, as a
+/// click on it would), and a placement point that the arrows move and Return turns into a new
+/// correction there, at the panel's default size and Red Eye / Pet Eye choice (as a drag would).
+fn eye_keys(app: &mut LightcraftApp, ui: &mut egui::Ui, map: &CanvasMap, d: &DevelopSettings) -> bool {
+    for (i, e) in d.red_eye.iter().enumerate() {
+        let q = map.screen(e.center);
+        let name = format!("{} {}", crate::i18n::tr(if e.pet { "Pet Eye" } else { "Red Eye" }), i + 1);
+        let keys = crate::canvas_keys::handle(ui, &format!("eye:{i}"), &name, crate::canvas_keys::position_text(e.center.x, e.center.y), q);
+        if keys.activated && app.ui.eye != i {
+            app.ui.eye = i;
+        }
+    }
+    // where a new correction goes: the photo's centre at first, then wherever the arrows took it
+    let key = egui::Id::unique("lc-eye-placement");
+    let place: (f64, f64) = ui.data(|m| m.get_temp(key)).unwrap_or((0.5, 0.5));
+    let q = map.screen(Point::new(place.0, place.1));
+    let keys = crate::canvas_keys::handle(
+        ui,
+        "eye:new",
+        crate::i18n::tr("New red eye correction (Return adds it here)"),
+        crate::canvas_keys::position_text(place.0, place.1),
+        q,
+    );
+    if let Some((dx, dy)) = keys.delta {
+        let moved = ((place.0 + dx).clamp(0.0, 1.0), (place.1 + dy).clamp(0.0, 1.0));
+        ui.data_mut(|m| m.insert_temp(key, moved));
+    }
+    if crate::canvas_keys::has_focus(ui.ctx()) && ui.memory(|m| m.has_focus(crate::canvas_keys::id("eye:new"))) {
+        ui.painter().circle_stroke(q, 10.0, Stroke::new(1.0, Color32::WHITE));
+    }
+    if keys.activated {
+        let r = app.run("redeye.add", json!({"center": [place.0, place.1], "pet": app.ui.eye_pet}));
+        if let Ok(v) = r {
+            app.ui.eye = v["index"].as_u64().unwrap_or(0) as usize;
+        }
+        return true;
+    }
+    false
 }

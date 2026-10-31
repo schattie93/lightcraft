@@ -115,6 +115,54 @@ fn spots_are_added_and_moved_by_keyboard() {
 }
 
 #[test]
+fn red_eye_corrections_are_added_and_selected_by_keyboard() {
+    let mut h = detail("panel.redeye");
+    assert!(develop(&h).red_eye.is_empty());
+    focus(&mut h, "eye:new");
+    key(&mut h, "right", true);
+    key(&mut h, "enter", false);
+    let eyes = develop(&h).red_eye;
+    assert_eq!(eyes.len(), 1, "Return adds a red eye correction");
+    let c = eyes[0].center;
+    assert!((c.x - 0.55).abs() < 1e-6 && (c.y - 0.5).abs() < 1e-6, "{c:?}");
+    assert_eq!(h.app.ui.eye, 0, "the new correction is selected");
+
+    // a second correction, as a pet eye
+    h.app.ui.eye_pet = true;
+    focus(&mut h, "eye:new");
+    key(&mut h, "down", true);
+    key(&mut h, "enter", false);
+    let eyes = develop(&h).red_eye;
+    assert_eq!(eyes.len(), 2);
+    assert!(eyes[1].pet, "the panel's Pet Eye choice is used");
+    assert_eq!(h.app.ui.eye, 1);
+
+    // Return on the first correction's stand-in selects it, as a click would
+    focus(&mut h, "eye:0");
+    key(&mut h, "enter", false);
+    assert_eq!(h.app.ui.eye, 0);
+}
+
+#[test]
+fn a_brush_dab_is_painted_by_keyboard() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "tool.brush", json!({"new": true}));
+    assert_eq!(h.app.ui.tool, "brush");
+    let r = h.request("ui.set", json!({"brushSize": 0.1}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    focus(&mut h, "brush:new");
+    key(&mut h, "left", true);
+    key(&mut h, "enter", false);
+    let masks = develop(&h).masks;
+    assert_eq!(masks.len(), 1);
+    let MaskShape::Brush { strokes } = &masks[0].components[0].shape else { panic!("brush") };
+    assert_eq!(strokes.len(), 1, "Return paints one dab");
+    let p = strokes[0].points[0];
+    assert!((p.x - 0.45).abs() < 1e-6 && (p.y - 0.5).abs() < 1e-6, "{p:?}");
+    assert!(!strokes[0].erase);
+}
+
+#[test]
 fn gradient_handles_and_pins_move_by_keyboard() {
     let mut h = detail("panel.masking");
     exec(&mut h, "mask.add", json!({"kind": "linear", "start": [0.5, 0.2], "end": [0.5, 0.7]}));
